@@ -1,0 +1,14 @@
+{
+  "name": "tap-n-talk",
+  "version": "1.0.0",
+  "description": "Walkie-Talkie app using WebRTC + Node.js",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.18.0",
+    "cors": "^2.8.5"
+  }
+}
