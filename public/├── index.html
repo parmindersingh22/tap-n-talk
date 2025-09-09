@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tap-n-Talk (WebRTC Walkie-Talkie)</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🔊 Tap-n-Talk</h1>
+      <p class="sub">Push-to-talk walkie-talkie using WebRTC</p>
+    </header>
+    <section class="card">
+      <div class="row">
+        <label>Room</label>
+        <input id="room" type="text" placeholder="e.g. demo123" />
+        <button id="btnJoin">Join</button>
+      </div>
+      <div class="row">
+        <span id="statusDot" class="dot dot-red"></span>
+        <span id="statusText">Not connected</span>
+      </div>
+      <div class="row">
+        <button id="btnCall" disabled>Call</button>
+        <button id="btnHangup" disabled>Hang up</button>
+      </div>
+      <div class="row">
+        <button id="btnPTT" class="ptt" disabled>Hold to Talk</button>
+        <label class="toggle">
+          <input id="toggleMode" type="checkbox" />
+          <span>Toggle mode</span>
+        </label>
+      </div>
+      <div class="row small">
+        <label>Input</label>
+        <select id="micSelect"></select>
+      </div>
+      <audio id="remoteAudio" autoplay playsinline></audio>
+    </section>
+    <footer>
+      <small>Tip: open this page on two devices with the same <b>?room=xyz</b> to connect.</small>
+    </footer>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
+
+* { box-sizing: border-box; }
+body { margin: 0; font: 16px system-ui; background: #0f172a; color: #e5e7eb;
+  display: grid; place-items: center; min-height: 100vh; }
+.container { width: min(680px, 92vw); }
+header { text-align: center; margin: 2rem 0 1rem; }
+h1 { margin: 0 0 0.25rem; font-size: 2rem; }
+.sub { color: #94a3b8; margin: 0; }
+.card { background: #111827; border: 1px solid #1f2937; border-radius: 1rem; padding: 1rem; }
+.row { display: flex; gap: 0.5rem; align-items: center; margin: 0.75rem 0; flex-wrap: wrap; }
+button { padding: 0.6rem 0.9rem; border: 1px solid #334155; border-radius: 0.6rem;
+  background: #0b1220; color: #e5e7eb; cursor: pointer; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.ptt { font-size: 1.2rem; font-weight: 700; padding: 0.8rem 1.5rem; border-radius: 999px; }
+.ptt.active { background: #047857; border-color: #059669; }
+.dot { width: 10px; height: 10px; border-radius: 999px; display: inline-block; }
+.dot-red { background: #ef4444; }
+.dot-green { background: #22c55e; }
+
+const qs = new URLSearchParams(location.search);
+const roomInput = document.getElementById("room");
+roomInput.value = qs.get("room") || "demo";
+
+const btnJoin = document.getElementById("btnJoin");
+const btnCall = document.getElementById("btnCall");
+const btnHangup = document.getElementById("btnHangup");
+const btnPTT = document.getElementById("btnPTT");
+const toggleMode = document.getElementById("toggleMode");
+const statusDot = document.getElementById("statusDot");
+const statusText = document.getElementById("statusText");
+const remoteAudio = document.getElementById("remoteAudio");
+const micSelect = document.getElementById("micSelect");
+
+let ws, pc, localStream, micTrack, isLatched = false;
+
+function setStatus(text, color="red") {
+  statusText.textContent = text;
+  statusDot.className = "dot " + (color==="green"?"dot-green":"dot-red");
+}
+
+async function getMicStream(deviceId) {
+  return await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+}
+
+async function initMedia() {
+  localStream = await getMicStream();
+  micTrack = localStream.getAudioTracks()[0];
+  micTrack.enabled = false;
+}
+
+function connectWS() {
+  const url = (location.protocol==="https:"?"wss":"ws")+"://"+location.host;
+  ws = new WebSocket(url);
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type:"join", room:roomInput.value }));
+    setStatus("Joined room","green");
+    btnCall.disabled=false;
+  };
+  ws.onmessage = async (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type==="offer") {
+      await ensurePC();
+      await pc.setRemoteDescription(msg.sdp);
+      const answer=await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      ws.send(JSON.stringify({ type:"answer", sdp:pc.localDescription }));
+    }
+    if (msg.type==="answer") {
+      await pc.setRemoteDescription(msg.sdp);
+    }
+    if (msg.type==="ice") {
+      if(pc) await pc.addIceCandidate(msg.candidate);
+    }
+  };
+}
+
+async function ensurePC() {
+  if(pc) return pc;
+  pc=new RTCPeerConnection({
+    iceServers:[
+      { urls:"stun:stun.l.google.com:19302" },
+      { urls:"turn:openrelay.metered.ca:80", username:"openrelayproject", credential:"openrelayproject" }
+    ]
+  });
+  if(!localStream) await initMedia();
+  pc.addTrack(micTrack,localStream);
+  pc.ontrack=(ev)=>{ remoteAudio.srcObject=ev.streams[0]; };
+  pc.onicecandidate=(ev)=>{ if(ev.candidate) ws.send(JSON.stringify({type:"ice",candidate:ev.candidate})); };
+  return pc;
+}
+
+async function startCall() {
+  await ensurePC();
+  const offer=await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  ws.send(JSON.stringify({type:"offer",sdp:pc.localDescription}));
+  btnHangup.disabled=false;
+  btnPTT.disabled=false;
+}
+
+function endCall() {
+  if(pc) pc.close();
+  pc=null;
+  btnHangup.disabled=true;
+  btnPTT.disabled=true;
+}
+
+btnJoin.onclick=connectWS;
+btnCall.onclick=startCall;
+btnHangup.onclick=endCall;
+initMedia();
